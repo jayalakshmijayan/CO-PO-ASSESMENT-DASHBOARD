@@ -1,7 +1,94 @@
+import requests
 import streamlit as st
 import pandas as pd
+from openpyxl.styles import Font, PatternFill, Alignment, Border
+from openpyxl.utils import get_column_letter
 from io import BytesIO
 from pathlib import Path
+
+
+def upload_to_google_sheets(department, program, course_code, result_df):
+
+    try:
+        url = st.secrets["apps_script_url"]
+
+        all_rows = [
+            [department],
+            [program],
+            [],
+            ["Course Code"] + result_df.columns.tolist()
+        ]
+
+        for _, row in result_df.iterrows():
+
+            assessment = row["Assessment"]
+
+            selected_course_code = (
+                "" if assessment == "TOTAL" else course_code
+            )
+
+            values = [selected_course_code, assessment]
+
+            for col in result_df.columns:
+                if col != "Assessment":
+                    values.append(round(float(row[col]), 2))
+
+            all_rows.append(values)
+
+        sheet_name = str(course_code).strip()
+
+        response = requests.post(
+            url,
+            json={
+                "department": str(department).strip(),
+                "sheetName": sheet_name,
+                "values": all_rows
+            },
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+        result = response.json()
+
+        if result.get("status") == "success":
+            st.success("Course saved successfully!")
+        else:
+            st.error(
+                f"Google Sheets error: {result.get('message')}"
+            )
+
+    except Exception as e:
+        st.error(f"Google Sheets upload failed: {e}")
+
+        
+        
+def get_department_courses_from_google_sheets(department):
+
+    try:
+        url = st.secrets["apps_script_url"]
+
+        response = requests.get(
+            url,
+            params={"department": str(department).strip()},
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+        result = response.json()
+
+        if result.get("status") == "success":
+            return result.get("courses", [])
+
+        st.error(
+            f"Could not retrieve courses: {result.get('message')}"
+        )
+        return []
+
+    except Exception as e:
+        st.error(f"Could not retrieve saved courses: {e}")
+        return []
 
 
 # ==================================================
@@ -16,34 +103,36 @@ st.set_page_config(
 
 EXCEL_FILE = Path(__file__).parent / "Course Group.xlsx"
 
-# Matrix standardisation target
-CONVERSION_TARGET = 20.0
-
+# The final matrix grand total is based on the sum of entered assessment weights.
 
 # ==================================================
-# CUSTOM CSS - FOREST GREEN + CHAMPAGNE
+# CUSTOM CSS - SLATE BLUE + WARM BEIGE
 # ==================================================
 
 st.markdown("""
 <style>
+
+/* MAIN PAGE BACKGROUND */
 .stApp {
-    background-color: #F3F6F1;
+    background-color: #F5F2EC;
 }
 
+/* GENERAL TEXT */
 .stApp p,
 .stApp li,
 .stApp label,
 .stApp [data-testid="stMarkdownContainer"] p,
 .stApp [data-testid="stCaptionContainer"] {
-    color: #171717 !important;
+    color: #29323A !important;
 }
 
+/* DASHBOARD HEADER */
 .dashboard-header {
-    background: linear-gradient(120deg, #183D32, #285C49);
+    background: linear-gradient(120deg, #26364A, #52677D);
     padding: 30px 32px;
     border-radius: 12px;
     margin-bottom: 25px;
-    border-bottom: 5px solid #C8B98A;
+    border-bottom: 5px solid #C6A77D;
 }
 
 .dashboard-header h1,
@@ -66,36 +155,40 @@ st.markdown("""
     opacity: 1 !important;
 }
 
+/* SECTION HEADINGS */
 .section-heading {
-    color: #183D32 !important;
+    color: #26364A !important;
     font-size: 21px;
     font-weight: 750;
     margin-top: 22px;
     margin-bottom: 14px;
-    border-left: 5px solid #C8B98A;
+    border-left: 5px solid #C6A77D;
     padding-left: 12px;
 }
 
+/* ASSESSMENT CARDS */
 [data-testid="stVerticalBlockBorderWrapper"] {
     background-color: #FFFFFF;
-    border: 1px solid #DCE5DA;
-    border-top: 4px solid #285C49;
+    border: 1px solid #E3DDD2;
+    border-top: 4px solid #52677D;
     border-radius: 12px;
     padding: 15px;
     margin-bottom: 15px;
 }
 
+/* ASSESSMENT TITLES */
 .assessment-title {
-    color: #183D32 !important;
+    color: #26364A !important;
     font-size: 20px;
     font-weight: 750;
     margin-bottom: 10px;
 }
 
+/* TEXT AND NUMBER INPUTS */
 .stTextInput input,
 .stNumberInput input {
-    color: #171717 !important;
-    -webkit-text-fill-color: #171717 !important;
+    color: #29323A !important;
+    -webkit-text-fill-color: #29323A !important;
     background-color: #FFFFFF !important;
 }
 
@@ -103,24 +196,27 @@ st.markdown("""
 .stNumberInput label,
 .stSelectbox label,
 .stCheckbox label {
-    color: #171717 !important;
+    color: #29323A !important;
     font-weight: 600 !important;
 }
 
+/* SELECT BOX */
 .stSelectbox div[data-baseweb="select"],
 .stSelectbox div[data-baseweb="select"] span {
-    color: #171717 !important;
+    color: #29323A !important;
 }
 
+/* BUTTONS */
 .stButton > button,
 .stDownloadButton > button {
-    background-color: #183D32 !important;
+    background-color: #26364A !important;
     color: #FFFFFF !important;
     -webkit-text-fill-color: #FFFFFF !important;
-    border: 2px solid #C8B98A !important;
+    border: 2px solid #C6A77D !important;
     border-radius: 8px;
     font-weight: 700 !important;
     padding: 9px 22px;
+    transition: 0.3s ease;
 }
 
 .stButton > button *,
@@ -132,41 +228,51 @@ st.markdown("""
 
 .stButton > button:hover,
 .stDownloadButton > button:hover {
-    background-color: #285C49 !important;
+    background-color: #52677D !important;
     color: #FFFFFF !important;
-    border-color: #D8CBA5 !important;
+    border-color: #C6A77D !important;
 }
 
+/* METRIC CARDS */
 [data-testid="stMetric"] {
     background-color: #FFFFFF;
-    border: 1px solid #DCE5DA;
-    border-left: 4px solid #C8B98A;
+    border: 1px solid #E3DDD2;
+    border-left: 4px solid #C6A77D;
     border-radius: 10px;
     padding: 15px;
 }
 
 [data-testid="stMetricLabel"] {
-    color: #183D32 !important;
+    color: #26364A !important;
     font-weight: 700 !important;
 }
 
 [data-testid="stMetricValue"] {
-    color: #183D32 !important;
+    color: #26364A !important;
     font-weight: 750 !important;
 }
 
-[data-testid="stDataFrame"] {
-    border: 1px solid #DCE5DA;
+/* DATA TABLES */
+[data-testid="stDataFrame"],
+[data-testid="stDataEditor"] {
+    border: 1px solid #E3DDD2;
     border-radius: 8px;
 }
 
+/* EXPANDER */
 [data-testid="stExpander"] summary {
-    color: #183D32 !important;
+    color: #26364A !important;
     font-weight: 700 !important;
+}
+.dashboard-department {
+    color: #E8DCC9 !important;
+    font-size: 14px;
+    font-weight: 600;
+    margin-top: 12px;
+    margin-bottom: 0;
 }
 </style>
 """, unsafe_allow_html=True)
-
 
 # ==================================================
 # DASHBOARD HEADER
@@ -178,10 +284,11 @@ st.markdown("""
     <div class="dashboard-subtitle">
         Course Outcome Assessment Weightage Management System
     </div>
+    <div class="dashboard-department">
+        Developed by MIMAMSA | Department of Statistics
+    </div>
 </div>
 """, unsafe_allow_html=True)
-
-
 # ==================================================
 # LOAD COURSE DETAILS FROM EXCEL
 # ==================================================
@@ -434,92 +541,203 @@ def pa_assessment_input(assessment_name, key_prefix):
             st.caption("No Course Outcomes selected.")
 
     return total_weight, selected_cos, assessment_co_weights
-
-
 # ==================================================
-# ASSESSMENT COMPONENTS
+# ASSESSMENT COMPONENTS - SINGLE ROW
 # ==================================================
 
 st.markdown(
-    '<div class="section-heading">Assessment Components</div>',
+    '<div class="section-heading">Assessment Configuration</div>',
     unsafe_allow_html=True
 )
 
-# PA1 and PA2 use individually entered CO allocations.
-pa1_weight, pa1_selected_cos, pa1_assessment_weights = (
-    pa_assessment_input("PA1", "pa1")
+# All four assessment cards in one horizontal row
+assessment_col1, assessment_col2, assessment_col3, assessment_col4 = (
+    st.columns(4, gap="small")
 )
 
-pa2_weight, pa2_selected_cos, pa2_assessment_weights = (
-    pa_assessment_input("PA2", "pa2")
-)
+with assessment_col1:
+    pa1_weight, pa1_selected_cos, pa1_assessment_weights = (
+        pa_assessment_input("PA1", "pa1")
+    )
 
-# LE1 and LM use the same CO-selection and assigned-weight inputs as PA1 and PA2.
-le1_weight, le1_selected_cos, le1_assessment_weights = (
-    pa_assessment_input("LE1", "le1")
-)
+with assessment_col2:
+    pa2_weight, pa2_selected_cos, pa2_assessment_weights = (
+        pa_assessment_input("PA2", "pa2")
+    )
 
-lm_weight, lm_selected_cos, lm_assessment_weights = (
-    pa_assessment_input("LM", "lm")
-)
+with assessment_col3:
+    le1_weight, le1_selected_cos, le1_assessment_weights = (
+        pa_assessment_input("LE1", "le1")
+    )
 
+with assessment_col4:
+    lm_weight, lm_selected_cos, lm_assessment_weights = (
+        pa_assessment_input("LM", "lm")
+    )
 
-# Keep a common structure for the summary and Excel sheets.
+# Keep the common structure for allocation and Excel sheets
 all_assessments = [
     ("PA1", pa1_weight, pa1_selected_cos, pa1_assessment_weights),
     ("PA2", pa2_weight, pa2_selected_cos, pa2_assessment_weights),
     ("LE1", le1_weight, le1_selected_cos, le1_assessment_weights),
     ("LM", lm_weight, lm_selected_cos, lm_assessment_weights)
 ]
-
-
 # ==================================================
-# BUILD RAW ALLOCATION MATRIX - BASED ON PASTED TEXT(6)
+# BUILD ALLOCATION MATRIX WITH FIXED ROW AND COLUMN TOTALS
 # ==================================================
 
+assessment_names = ["PA1", "PA2", "LE1", "LM"]
+
+# The entered CO weights form the starting pattern for distributing
+# the allocation. Unselected COs and COs with zero assigned weight
+# remain unavailable for that assessment.
 raw_matrix = pd.DataFrame(
     0.0,
-    index=["PA1", "PA2", "LE1", "LM"],
+    index=assessment_names,
     columns=co_list
 )
 
-# All four assessments use their individually entered CO weights.
-# For each assessment, the selected CO weights are proportionally
-# converted so that their sum equals that assessment's total weight.
 for assessment, total_weight, selected_cos, assessment_co_weights in all_assessments:
 
-    entered_co_total = sum(
-        assessment_co_weights.get(co, 0.0)
-        for co in selected_cos
-    )
+    for co in selected_cos:
+        raw_matrix.loc[assessment, co] = max(
+            0.0,
+            float(assessment_co_weights.get(co, 0.0))
+        )
 
-    if entered_co_total > 0:
+# Row targets equal the entered assessment totals exactly.
+# Column targets are the fixed CO weightages converted proportionally
+# to the sum of all assessment totals. Therefore, row totals, column
+# totals and the grand total are all consistent.
+assessment_total_sum = sum(
+    float(total_weight) for _, total_weight, _, _ in all_assessments
+)
+fixed_co_weightage_total = sum(
+    float(co_weightages[co]) for co in co_list
+)
 
-        for co in selected_cos:
+allocation_matrix = pd.DataFrame(
+    0.0,
+    index=assessment_names,
+    columns=co_list
+)
 
-            entered_weight = assessment_co_weights.get(co, 0.0)
+balance_error = None
 
-            raw_matrix.loc[assessment, co] = (
-                entered_weight * total_weight / entered_co_total
-            )
+if assessment_total_sum > 0:
 
+    if fixed_co_weightage_total <= 0:
+        balance_error = (
+            "The total fixed CO weightage must be greater than zero "
+            "when the assessment total is greater than zero."
+        )
 
-# ==================================================
-# STANDARDISE GRAND TOTAL TO 20
-# ==================================================
+    else:
+        row_targets = pd.Series(
+            {
+                assessment: float(total_weight)
+                for assessment, total_weight, _, _ in all_assessments
+            }
+        )
 
-raw_grand_total = raw_matrix.to_numpy().sum()
+        column_targets = pd.Series(
+            {
+                co: (
+                    float(co_weightages[co]) / fixed_co_weightage_total
+                ) * assessment_total_sum
+                for co in co_list
+            }
+        )
 
-if raw_grand_total > 0:
+        # Check whether every positive row and column target has at
+        # least one positive entered CO weight available for allocation.
+        for assessment in assessment_names:
+            if (
+                row_targets[assessment] > 0
+                and raw_matrix.loc[assessment].sum() <= 0
+            ):
+                balance_error = (
+                    f"{assessment}: Enter a positive assigned weight "
+                    "for at least one selected CO."
+                )
+                break
 
-    allocation_matrix = raw_matrix * (
-        CONVERSION_TARGET / raw_grand_total
-    )
+        if balance_error is None:
+            for co in co_list:
+                if (
+                    column_targets[co] > 0
+                    and raw_matrix[co].sum() <= 0
+                ):
+                    balance_error = (
+                        f"{co} has a positive fixed CO weightage, but "
+                        "no assessment has a positive assigned weight "
+                        "for this CO. Select that CO and enter a positive "
+                        "assigned weight in at least one assessment."
+                    )
+                    break
 
-else:
+        if balance_error is None:
+            # Iterative proportional fitting (RAS method): repeatedly
+            # adjust rows and columns until row totals equal the entered
+            # assessment weights and column totals equal the converted
+            # fixed CO weightages, while retaining the entered pattern.
+            balanced = raw_matrix.astype(float).copy()
 
-    allocation_matrix = raw_matrix.copy()
+            # A zero target must have an entirely zero row/column.
+            for assessment in assessment_names:
+                if row_targets[assessment] == 0:
+                    balanced.loc[assessment, :] = 0.0
 
+            for co in co_list:
+                if column_targets[co] == 0:
+                    balanced.loc[:, co] = 0.0
+
+            converged = False
+            tolerance = 1e-9
+            max_iterations = 20000
+
+            for _ in range(max_iterations):
+
+                # Match row totals to assessment targets.
+                current_rows = balanced.sum(axis=1)
+                for assessment in assessment_names:
+                    current = current_rows[assessment]
+                    target = row_targets[assessment]
+                    if target == 0:
+                        balanced.loc[assessment, :] = 0.0
+                    elif current > 0:
+                        balanced.loc[assessment, :] *= target / current
+
+                # Match column totals to fixed-CO targets.
+                current_columns = balanced.sum(axis=0)
+                for co in co_list:
+                    current = current_columns[co]
+                    target = column_targets[co]
+                    if target == 0:
+                        balanced.loc[:, co] = 0.0
+                    elif current > 0:
+                        balanced.loc[:, co] *= target / current
+
+                row_difference = (
+                    balanced.sum(axis=1) - row_targets
+                ).abs().max()
+                column_difference = (
+                    balanced.sum(axis=0) - column_targets
+                ).abs().max()
+
+                if max(row_difference, column_difference) < tolerance:
+                    converged = True
+                    break
+
+            if converged:
+                allocation_matrix = balanced
+            else:
+                balance_error = (
+                    "The selected CO combinations and assigned weights "
+                    "cannot satisfy all row and column totals together. "
+                    "Please review the CO selections and assigned weights "
+                    "for PA1, PA2, LE1 and LM."
+                )
 
 # Store allocated values in a common dictionary.
 allocations = {
@@ -527,7 +745,7 @@ allocations = {
         co: float(allocation_matrix.loc[assessment, co])
         for co in co_list
     }
-    for assessment in ["PA1", "PA2", "LE1", "LM"]
+    for assessment in assessment_names
 }
 
 
@@ -545,8 +763,8 @@ st.markdown(
 st.caption(
     "You can edit the CO values directly in this table. "
     "The corresponding Assigned Weight above will update automatically. "
-    "These are the entered CO weights; the standardised allocation is "
-    "calculated separately below."
+    "These are the entered CO weights. The final matrix will match each "
+    "assessment total and each proportionally converted fixed CO total."
 )
 
 assessment_prefixes = {
@@ -616,26 +834,10 @@ for assessment, entered_total, selected_cos, assessment_co_weights in all_assess
     for co in co_list:
         row[co] = float(assessment_co_weights.get(co, 0.0))
 
-    row["TOTAL"] = sum(row[co] for co in co_list)
     editable_rows.append(row)
 
-editable_total_row = {
-    "Assessment": "TOTAL",
-    "Entered Assessment Weight": sum(
-        item[1] for item in all_assessments
-    )
-}
-
-for co in co_list:
-    editable_total_row[co] = sum(
-        row[co] for row in editable_rows
-    )
-
-editable_total_row["TOTAL"] = sum(
-    editable_total_row[co] for co in co_list
-)
-
-editable_live_df = pd.DataFrame(editable_rows + [editable_total_row])
+# Create the editable table without TOTAL row or TOTAL column
+editable_live_df = pd.DataFrame(editable_rows)
 
 column_config = {
     "Assessment": st.column_config.TextColumn(
@@ -644,11 +846,6 @@ column_config = {
     ),
     "Entered Assessment Weight": st.column_config.NumberColumn(
         "Entered Assessment Weight",
-        disabled=True,
-        format="%.2f"
-    ),
-    "TOTAL": st.column_config.NumberColumn(
-        "TOTAL",
         disabled=True,
         format="%.2f"
     )
@@ -661,13 +858,12 @@ for co in co_list:
         step=0.5,
         format="%.2f"
     )
-
 st.data_editor(
     editable_live_df,
     use_container_width=True,
     hide_index=True,
     num_rows="fixed",
-    disabled=["Assessment", "Entered Assessment Weight", "TOTAL"],
+    disabled=["Assessment", "Entered Assessment Weight"],
     column_config=column_config,
     key=editor_key,
     on_change=sync_table_edits_to_assessment_inputs,
@@ -713,6 +909,9 @@ if calculate_button:
                 "a total greater than zero."
             )
 
+    if balance_error is not None:
+        errors.append(balance_error)
+
     if errors:
 
         for error in errors:
@@ -756,6 +955,7 @@ if calculate_button:
         matrix_rows.append(total_row)
 
         result_df = pd.DataFrame(matrix_rows)
+        
 
         # ------------------------------------------
         # DISPLAY FINAL MATRIX
@@ -785,14 +985,14 @@ if calculate_button:
         with metric1:
 
             st.metric(
-                "Standardised Matrix Grand Total",
+                "Total CCA",
                 f"{total_row['TOTAL']:.2f}"
             )
 
         with metric2:
 
             st.metric(
-                "Total Fixed CO Weightage",
+                "Total Marks for ESE",
                 f"{fixed_co_weightage_total:.2f}"
             )
 
@@ -802,162 +1002,259 @@ if calculate_button:
                 "Number of Course Outcomes",
                 len(co_list)
             )
+            
+        # ------------------------------------------
+        # GOOGLE SHEETS UPLOAD
+        # ------------------------------------------
+
+        upload_to_google_sheets(
+            department,
+            program,
+            course_code,
+            result_df
+        )
 
         # ------------------------------------------
-        # EXCEL EXPORT
+        # RETRIEVE ALL COURSES FOR THIS DEPARTMENT
         # ------------------------------------------
 
-        output = BytesIO()
+        saved_courses = get_department_courses_from_google_sheets(
+            department
+        )
 
-        course_details = pd.DataFrame({
-            "Department": [department],
-            "Program Type": [program_type],
-            "Program": [program],
-            "Program Code": [course_code],
-            "Number of COs": [number_of_cos]
-        })
+        if not saved_courses:
 
-        co_total_df = pd.DataFrame({
-            "Course Outcome": co_list,
-
-            "Fixed CO Weightage": [
-                co_weightages[co] for co in co_list
-            ],
-
-            "Total Assessment Allocation": [
-                total_row[co] for co in co_list
-            ]
-        })
-
-        fixed_co_weightage_df = pd.DataFrame({
-            "Course Outcome": co_list,
-
-            "Fixed CO Weightage": [
-                co_weightages[co] for co in co_list
-            ]
-        })
-
-        with pd.ExcelWriter(
-            output,
-            engine="openpyxl"
-        ) as writer:
-
-            # Final allocation matrix
-            result_df.round(2).to_excel(
-                writer,
-                sheet_name="CO Assessment Matrix",
-                index=False
+            st.error(
+                "No saved course data found. "
+                "Please check the Google Sheets connection."
             )
 
-            # Individual assessment sheets
-            for name, total_weight, selected_cos, assessment_co_weights in all_assessments:
+        else:
 
-                weightage_df = pd.DataFrame({
-                    "Course Outcome": selected_cos,
+            # ------------------------------------------
+            # EXCEL EXPORT - MULTIPLE COURSE SHEETS
+            # ------------------------------------------
 
-                    "Fixed CO Weightage": [
-                        co_weightages[co] for co in selected_cos
-                    ],
+            output = BytesIO()
 
-                    "Assessment CO Weightage": [
-                        assessment_co_weights[co]
-                        for co in selected_cos
-                    ],
+            with pd.ExcelWriter(
+                output,
+                engine="openpyxl"
+            ) as writer:
 
-                    "Allocated Weight": [
-                        allocations[name][co]
-                        for co in selected_cos
+                for course in saved_courses:
+
+                    values = course["values"]
+
+                    # Get course details
+                    course_department = values[0][0]
+                    course_program = values[1][0]
+
+                    # Get table headings (exclude Course Code column)
+                    headers = values[3][1:]
+
+                    # Get matrix data (exclude Course Code column)
+                    data_rows = [
+                        row[1:len(headers) + 1]
+                        for row in values[4:]
                     ]
-                })
 
-                weightage_df.to_excel(
-                    writer,
-                    sheet_name=f"{name} CO Weightage",
-                    index=False
-                )
+                    course_df = pd.DataFrame(
+                        data_rows,
+                        columns=headers
+                    )
 
-            fixed_co_weightage_df.to_excel(
-                writer,
-                sheet_name="CO Weightages",
-                index=False
-            )
+                    course_df = course_df.round(2)
 
-            course_details.to_excel(
-                writer,
-                sheet_name="Course Details",
-                index=False
-            )
+                    # --------------------------------------
+                    # CREATE WORKSHEET NAME
+                    # --------------------------------------
 
-            co_total_df.to_excel(
-                writer,
-                sheet_name="CO-wise Total",
-                index=False
-            )
+                    safe_course_code = "".join(
+                        ch for ch in str(course["name"])
+                        if ch not in '[]:*?/\\'
+                    ).strip("'")
 
-            # --------------------------------------
-            # EXCEL FORMATTING
-            # --------------------------------------
+                    sheet_suffix = "-CO Matrix"
 
-            from openpyxl.styles import (
-                Font,
-                PatternFill,
-                Alignment
-            )
+                    sheet_name = (
+                        safe_course_code[:31 - len(sheet_suffix)]
+                        + sheet_suffix
+                    )
 
-            for worksheet in writer.book.worksheets:
+                    # --------------------------------------
+                    # EXPORT COURSE MATRIX
+                    # --------------------------------------
 
-                worksheet.freeze_panes = "A2"
+                    course_df.to_excel(
+                        writer,
+                        sheet_name=sheet_name,
+                        index=False,
+                        startrow=3
+                    )
 
-                for cell in worksheet[1]:
+                    worksheet = writer.sheets[sheet_name]
 
-                    cell.font = Font(
+                    last_column = course_df.shape[1]
+
+                    # --------------------------------------
+                    # FIRST ROW - DEPARTMENT NAME
+                    # --------------------------------------
+
+                    worksheet.merge_cells(
+                        start_row=1,
+                        start_column=1,
+                        end_row=1,
+                        end_column=last_column
+                    )
+
+                    worksheet["A1"] = course_department
+                    worksheet["A1"].border = Border()
+
+                    worksheet["A1"].font = Font(
                         bold=True,
+                        size=16,
                         color="FFFFFF"
                     )
 
-                    cell.fill = PatternFill(
+                    worksheet["A1"].fill = PatternFill(
                         fill_type="solid",
-                        fgColor="183D32"
+                        fgColor="26364A"
                     )
 
-                    cell.alignment = Alignment(
+                    worksheet["A1"].alignment = Alignment(
                         horizontal="center",
                         vertical="center"
                     )
 
-                for column_cells in worksheet.columns:
+                    # --------------------------------------
+                    # SECOND ROW - COURSE NAME
+                    # --------------------------------------
 
-                    max_length = max(
-                        (
-                            len(str(cell.value))
-                            for cell in column_cells
-                            if cell.value is not None
-                        ),
-                        default=0
+                    worksheet.merge_cells(
+                        start_row=2,
+                        start_column=1,
+                        end_row=2,
+                        end_column=last_column
                     )
 
-                    worksheet.column_dimensions[
-                        column_cells[0].column_letter
-                    ].width = min(max_length + 4, 40)
+                    worksheet["A2"] = course_program
+                    worksheet["A2"].border = Border()
 
-        output.seek(0)
+                    worksheet["A2"].font = Font(
+                        bold=True,
+                        size=13,
+                        color="26364A"
+                    )
 
-        # ------------------------------------------
-        # DOWNLOAD BUTTON
-        # ------------------------------------------
+                    worksheet["A2"].alignment = Alignment(
+                        horizontal="center",
+                        vertical="center"
+                    )
 
-        st.markdown(
-            '<div class="section-heading">Download Results</div>',
-            unsafe_allow_html=True
-        )
+                    # --------------------------------------
+                    # FOURTH ROW - MATRIX HEADINGS
+                    # --------------------------------------
 
-        st.download_button(
-            label="Download Excel Report",
-            data=output,
-            file_name="CO_Weightage_Allocation.xlsx",
-            mime=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
-            use_container_width=True
-        )
+                    for cell in worksheet[4]:
+
+                        cell.font = Font(
+                            bold=True,
+                            color="FFFFFF"
+                        )
+
+                        cell.fill = PatternFill(
+                            fill_type="solid",
+                            fgColor="26364A"
+                        )
+
+                        cell.alignment = Alignment(
+                            horizontal="center",
+                            vertical="center"
+                        )
+
+                    # --------------------------------------
+                    # MATRIX VALUES
+                    # --------------------------------------
+
+                    for row in worksheet.iter_rows(
+                        min_row=5,
+                        max_row=worksheet.max_row
+                    ):
+
+                        for cell in row:
+
+                            cell.alignment = Alignment(
+                                horizontal="center",
+                                vertical="center"
+                            )
+
+                    # Bold TOTAL row
+                    for cell in worksheet[worksheet.max_row]:
+                        cell.font = Font(bold=True)
+
+                    # --------------------------------------
+                    # COLUMN WIDTHS AND ROW HEIGHTS
+                    # --------------------------------------
+
+                    for col_num in range(
+                        1,
+                        worksheet.max_column + 1
+                    ):
+
+                        max_length = 0
+
+                        for row_num in range(
+                            4,
+                            worksheet.max_row + 1
+                        ):
+
+                            cell_value = worksheet.cell(
+                                row=row_num,
+                                column=col_num
+                            ).value
+
+                            if cell_value is not None:
+
+                                max_length = max(
+                                    max_length,
+                                    len(str(cell_value))
+                                )
+
+                        column_letter = get_column_letter(col_num)
+
+                        worksheet.column_dimensions[
+                            column_letter
+                        ].width = min(max_length + 4, 25)
+
+                    worksheet.row_dimensions[1].height = 28
+                    worksheet.row_dimensions[2].height = 24
+
+                    worksheet.freeze_panes = "B5"
+
+            output.seek(0)
+
+            # --------------------------------------
+            # DOWNLOAD BUTTON
+            # --------------------------------------
+
+            st.markdown(
+                '<div class="section-heading">Download Results</div>',
+                unsafe_allow_html=True
+            )
+
+            safe_department = "".join(
+                ch for ch in str(department)
+                if ch not in '[]:*?/\\'
+            ).strip()
+
+            st.download_button(
+                label="Download Excel Report",
+                data=output,
+                file_name=f"{safe_department}_CO_Assessment_Matrices.xlsx",
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                use_container_width=True
+            )
