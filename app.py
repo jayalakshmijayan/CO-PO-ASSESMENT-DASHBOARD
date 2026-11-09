@@ -101,8 +101,7 @@ st.set_page_config(
     layout="wide"
 )
 
-EXCEL_FILE = Path(__file__).parent / "Course Group.xlsx"
-
+EXCEL_FILE = Path(__file__).parent / "All_Courses_Consolidated.xlsx"
 # The final matrix grand total is based on the sum of entered assessment weights.
 
 # ==================================================
@@ -296,7 +295,11 @@ st.markdown("""
 @st.cache_data
 def load_course_data():
 
-    df = pd.read_excel(EXCEL_FILE, header=1)
+    df = pd.read_excel(
+        EXCEL_FILE,
+        sheet_name="All Courses",
+        header=0
+    )
 
     df.columns = [
         " ".join(
@@ -305,15 +308,15 @@ def load_course_data():
         for col in df.columns
     ]
 
-    department_aliases = {
-        "Handling Department": "Department",
-        "Departmen": "Department"
-    }
-
-    df.rename(columns=department_aliases, inplace=True)
+    df.rename(
+        columns={"Handling Department": "Department"},
+        inplace=True
+    )
 
     required_columns = [
         "Department",
+        "Level",
+        "Semester",
         "Program Type",
         "Program",
         "Program Code"
@@ -338,7 +341,9 @@ def load_course_data():
     for col in required_columns:
         df = df[df[col] != ""]
 
-    return df.drop_duplicates().reset_index(drop=True)
+    df = df.drop_duplicates(subset=required_columns)
+
+    return df.reset_index(drop=True)
 
 
 try:
@@ -346,14 +351,14 @@ try:
 
 except FileNotFoundError:
     st.error(
-        "Course Group.xlsx was not found. "
+        "All_Courses_Consolidated.xlsx was not found. "
         "Keep it in the same folder as app.py."
     )
     st.stop()
 
 except PermissionError:
     st.error(
-        "Unable to access Course Group.xlsx. "
+        "Unable to access All_Courses_Consolidated.xlsx. "
         "Close the Excel file if it is open."
     )
     st.stop()
@@ -372,11 +377,12 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# Department and Level
 col1, col2 = st.columns(2)
 
 with col1:
     departments = sorted(
-        course_data["Department"].unique().tolist()
+        course_data["Department"].dropna().unique().tolist()
     )
 
     department = st.selectbox(
@@ -385,56 +391,91 @@ with col1:
         key="department"
     )
 
+department_data = course_data[
+    course_data["Department"] == department
+]
+
 with col2:
+    levels = sorted(
+        department_data["Level"].dropna().unique().tolist()
+    )
+
+    level = st.selectbox(
+        "Level",
+        levels,
+        key=f"level_{department}"
+    )
+
+level_data = department_data[
+    department_data["Level"] == level
+]
+
+# Semester and Program Type
+col3, col4 = st.columns(2)
+
+with col3:
+    semesters = sorted(
+        level_data["Semester"].dropna().unique().tolist(),
+        key=lambda value: int(
+            "".join(ch for ch in str(value) if ch.isdigit()) or 0
+        )
+    )
+
+    semester = st.selectbox(
+        "Semester",
+        semesters,
+        key=f"semester_{department}_{level}"
+    )
+
+semester_data = level_data[
+    level_data["Semester"] == semester
+]
+
+with col4:
     program_types = sorted(
-        course_data.loc[
-            course_data["Department"] == department,
-            "Program Type"
-        ].unique().tolist()
+        semester_data["Program Type"].dropna().unique().tolist()
     )
 
     program_type = st.selectbox(
         "Program Type",
         program_types,
-        key="program_type"
+        key=f"program_type_{department}_{level}_{semester}"
     )
 
-filtered_programs = course_data[
-    (course_data["Department"] == department) &
-    (course_data["Program Type"] == program_type)
+# Course Name and Course Code
+filtered_programs = semester_data[
+    semester_data["Program Type"] == program_type
 ]
 
-col3, col4 = st.columns(2)
+col5, col6 = st.columns(2)
 
-with col3:
+with col5:
     programs = sorted(
-        filtered_programs["Program"].unique().tolist()
+        filtered_programs["Program"].dropna().unique().tolist()
     )
 
     program = st.selectbox(
         "Course Name",
         programs,
-        key="program"
+        key=f"program_{department}_{level}_{semester}_{program_type}"
     )
 
-with col4:
+with col6:
     matching_courses = filtered_programs[
         filtered_programs["Program"] == program
     ]
 
-    course_codes = matching_courses["Program Code"].unique()
+    course_codes = matching_courses["Program Code"].dropna().unique()
 
     course_code = (
-        course_codes[0] if len(course_codes) > 0 else ""
+        str(course_codes[0]) if len(course_codes) > 0 else ""
     )
 
     st.text_input(
         "Course Code",
-        value=str(course_code),
+        value=course_code,
         disabled=True
     )
-
-
 # ==================================================
 # COURSE OUTCOMES - FIXED CO WEIGHTAGES
 # ==================================================
